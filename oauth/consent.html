@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Coach sign-in</title>
+<style>
+  :root { --bg:#f6f6f4; --card:#ffffff; --text:#151515; --muted:#6b6b6b; --line:#e4e4e0; --accent:#1f6f4a; --accent-text:#fff; --danger:#a33; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1110; --card:#181b19; --text:#ecefed; --muted:#9aa19d; --line:#2a2f2c; --accent:#3fae7a; --accent-text:#08130d; --danger:#e07a7a; } }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; padding:16px; background:var(--bg); color:var(--text);
+         font:16px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif; }
+  .card { width:100%; max-width:400px; background:var(--card); border:1px solid var(--line); border-radius:18px; padding:28px 24px; }
+  h1 { font-size:22px; margin:0 0 6px; letter-spacing:-0.01em; }
+  p { margin:0 0 14px; color:var(--muted); }
+  label { display:block; font-size:13px; color:var(--muted); margin:14px 0 6px; }
+  input { width:100%; padding:12px 14px; border-radius:12px; border:1px solid var(--line); background:transparent; color:var(--text); font-size:16px; }
+  button { width:100%; margin-top:16px; padding:13px; border-radius:12px; border:0; font-size:16px; font-weight:600; cursor:pointer;
+           background:var(--accent); color:var(--accent-text); }
+  button.ghost { background:transparent; color:var(--text); border:1px solid var(--line); font-weight:500; }
+  button:disabled { opacity:.55; cursor:default; }
+  .row { display:flex; gap:10px; } .row button { flex:1; }
+  .box { border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin:10px 0; }
+  .k { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  .v { font-weight:600; word-break:break-all; }
+  .err { color:var(--danger); font-size:14px; margin-top:12px; min-height:1em; }
+  .small { font-size:13px; color:var(--muted); margin-top:14px; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<main class="card">
+  <section id="loading"><h1>Coach</h1><p>Checking sign-in...</p></section>
+
+  <section id="signin" class="hidden">
+    <h1>Sign in to Coach</h1>
+    <p>Claude is asking to use your coach data. Sign in first.</p>
+    <form id="pwform">
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username" required>
+      <label for="pw">Password</label>
+      <input id="pw" type="password" autocomplete="current-password" required>
+      <button id="pwbtn" type="submit">Sign in</button>
+    </form>
+    <button id="linkbtn" class="ghost" type="button">Email me a sign-in link instead</button>
+    <div id="signin-err" class="err"></div>
+  </section>
+
+  <section id="consent" class="hidden">
+    <h1>Allow access?</h1>
+    <p><span id="client-name" class="v"></span> wants to read and log your food, training, weight, recovery and health data, as you.</p>
+    <div class="box"><div class="k">Sends you back to</div><div id="redirect-host" class="v"></div></div>
+    <div class="box"><div class="k">Access requested</div><div id="scopes" class="v"></div></div>
+    <div class="box"><div class="k">Signed in as</div><div id="who" class="v"></div></div>
+    <div class="row">
+      <button id="deny" class="ghost" type="button">Deny</button>
+      <button id="approve" type="button">Allow</button>
+    </div>
+    <div id="consent-err" class="err"></div>
+    <p class="small">You can remove access any time by disconnecting Coach in Claude's connector settings.</p>
+  </section>
+
+  <section id="done" class="hidden"><h1>Done</h1><p id="done-msg">Returning to Claude...</p></section>
+  <section id="nothing" class="hidden"><h1>Coach</h1><p>Nothing to approve here. Connect Coach from Claude's connector settings and you'll be sent to this page.</p></section>
+</main>
+
+<script type="module">
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/+esm'
+
+// Public values only: the project URL and its publishable key (safe to ship in a web page; RLS protects the data).
+const SUPABASE_URL = 'https://vxpsjaxnjetsholrbmla.supabase.co'
+const PUBLISHABLE_KEY = 'sb_publishable_OF0f3y_4Q4BdZCr10F01vQ_L3miCBOB'
+const sb = createClient(SUPABASE_URL, PUBLISHABLE_KEY, { auth: { persistSession: true, detectSessionInUrl: true, flowType: 'pkce' } })
+
+const $ = (id) => document.getElementById(id)
+const show = (id) => { for (const s of ['loading', 'signin', 'consent', 'done', 'nothing']) $(s).classList.toggle('hidden', s !== id) }
+const authorizationId = new URLSearchParams(location.search).get('authorization_id')
+
+async function loadConsent() {
+  const { data: { user } } = await sb.auth.getUser()
+  if (!user) return show('signin')
+  const { data, error } = await sb.auth.oauth.getAuthorizationDetails(authorizationId)
+  if (error) { show('consent'); $('consent-err').textContent = error.message; $('approve').disabled = true; return }
+  if (!('authorization_id' in data)) { show('done'); location.assign(data.redirect_url); return } // already approved before
+  $('client-name').textContent = data.client?.name || 'An app'
+  try { $('redirect-host').textContent = new URL(data.redirect_uri).host } catch { $('redirect-host').textContent = data.redirect_uri }
+  $('scopes').textContent = (data.scope || '').split(' ').filter(Boolean).join(', ') || 'Your account'
+  $('who').textContent = user.email
+  show('consent')
+}
+
+$('pwform').addEventListener('submit', async (e) => {
+  e.preventDefault(); $('pwbtn').disabled = true; $('signin-err').textContent = ''
+  const { error } = await sb.auth.signInWithPassword({ email: $('email').value.trim(), password: $('pw').value })
+  $('pwbtn').disabled = false
+  if (error) { $('signin-err').textContent = error.message; return }
+  loadConsent()
+})
+
+$('linkbtn').addEventListener('click', async () => {
+  const email = $('email').value.trim()
+  if (!email) { $('signin-err').textContent = 'Enter your email first.'; return }
+  const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: location.href } })
+  $('signin-err').textContent = error ? error.message : 'Check your email and open the link on this device.'
+})
+
+$('approve').addEventListener('click', async () => {
+  $('approve').disabled = true; $('deny').disabled = true
+  const { data, error } = await sb.auth.oauth.approveAuthorization(authorizationId, { skipBrowserRedirect: true })
+  if (error) { $('consent-err').textContent = error.message; $('approve').disabled = false; $('deny').disabled = false; return }
+  show('done'); location.assign(data.redirect_url)
+})
+
+$('deny').addEventListener('click', async () => {
+  const { data, error } = await sb.auth.oauth.denyAuthorization(authorizationId, { skipBrowserRedirect: true })
+  if (error) { $('consent-err').textContent = error.message; return }
+  show('done'); $('done-msg').textContent = 'Access denied. You can close this page.'
+  if (data?.redirect_url) location.assign(data.redirect_url)
+})
+
+if (!authorizationId) show('nothing'); else loadConsent()
+</script>
+</body>
+</html>
